@@ -6,7 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
-
+#include "pinfo.h"
 uint64
 sys_exit(void)
 {
@@ -34,6 +34,37 @@ sys_wait(void)
   uint64 p;
   argaddr(0, &p);
   return kwait(p);
+}
+
+uint64
+sys_getprocs(void)
+{
+  uint64 user_buf;
+  int max;
+  int count;
+  struct pinfo kbuf[NPROC];
+  struct proc *p = myproc();
+
+  argaddr(0, &user_buf);
+  argint(1, &max);
+
+  if (max < 0)
+    return -1;
+
+  if (max > NPROC)
+    max = NPROC;
+
+  count = proc_getprocs(kbuf, max);
+
+  if (count < 0)
+    return -1;
+
+  if (count > 0 &&
+      copyout(p->pagetable, p->sz, user_buf,
+              (char *)kbuf, count * sizeof(struct pinfo)) < 0)
+    return -1;
+
+  return count;
 }
 
 uint64

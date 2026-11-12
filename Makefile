@@ -150,6 +150,7 @@ UPROGS=\
 	$U/_logstress\
 	$U/_forphan\
 	$U/_dorphan\
+	$U/_ps\
 	$U/_sync\
 
 fs.img: mkfs/mkfs README $(UPROGS)

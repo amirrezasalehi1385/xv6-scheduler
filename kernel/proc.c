@@ -5,6 +5,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "pinfo.h"
+
 
 struct cpu cpus[NCPU];
 
@@ -417,6 +419,45 @@ kwait(uint64 addr)
     acquire(&wait_lock);
   }
 }
+
+// Collect information about existing processes.
+int
+proc_getprocs(struct pinfo *buf, int max)
+{
+  struct proc *p;
+  int count = 0;
+
+  if (max < 0)
+    return -1;
+
+  acquire(&wait_lock);
+
+  for (p = proc; p < &proc[NPROC] && count < max; p++) {
+    acquire(&p->lock);
+
+    if (p->state != UNUSED) {
+      buf[count].pid = p->pid;
+
+      if (p->parent != 0)
+        buf[count].ppid = p->parent->pid;
+      else
+        buf[count].ppid = 0;
+
+      buf[count].state = p->state;
+      buf[count].sz = p->sz;
+      memmove(buf[count].name, p->name, sizeof(p->name));
+
+      count++;
+    }
+
+    release(&p->lock);
+  }
+
+  release(&wait_lock);
+
+  return count;
+}
+
 
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
