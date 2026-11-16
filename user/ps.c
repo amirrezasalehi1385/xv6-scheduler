@@ -7,17 +7,17 @@ state_name(int state)
 {
   switch (state) {
   case 1:
-    return "USED";
+    return "USED    ";
   case 2:
     return "SLEEPING";
   case 3:
     return "RUNNABLE";
   case 4:
-    return "RUNNING";
+    return "RUNNING ";
   case 5:
-    return "ZOMBIE";
+    return "ZOMBIE  ";
   default:
-    return "UNKNOWN";
+    return "UNKNOWN ";
   }
 }
 
@@ -33,7 +33,7 @@ main(void)
     exit(1);
   }
 
-  printf("PID\tPPID\tSTATE\tSIZE\tNAME\n");
+  printf("PID\tPPID\tSTATE   \tSIZE\tNAME\n");
 
   for (int i = 0; i < count; i++) {
     printf("%d\t%d\t%s\t%lu\t%s\n",
