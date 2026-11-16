@@ -48,7 +48,7 @@ sys_getprocs(void)
   argaddr(0, &user_buf);
   argint(1, &max);
 
-  if (max < 0)
+  if (max <= 0)
     return -1;
 
   if (max > NPROC)
