@@ -29,6 +29,7 @@ main()
     fileinit();         // file table
     virtio_disk_init(); // emulated hard disk
     userinit();         // first user process
+    lcg_init();     // initialize the linear congruential generator 
 
     __atomic_store_n(&started, 1, __ATOMIC_RELEASE);
   } else {
