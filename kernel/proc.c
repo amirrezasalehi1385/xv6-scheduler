@@ -19,7 +19,7 @@ struct spinlock pid_lock;
 
 extern void forkret(void);
 static void freeproc(struct proc *p);
-
+extern uint ticks;
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
@@ -126,7 +126,14 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  p->queue  = 1;
+  p->qenter = ticks;
+  p->wait   = 0;
+  p->burst  = 2;
+  p->conf   = 50;
+  p->qticks = 0;
+  if(p->pid == 1 || p->pid == 2)   // init و sh
+    p->queue = 1;
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
     freeproc(p);
@@ -466,6 +473,50 @@ proc_getprocs(struct pinfo *buf, int max)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+#ifdef SCHED_MLFQ
+static int rr_last = 0;
+
+void
+scheduler(void)
+{
+  struct proc *p, *chosen;
+  struct cpu *c = mycpu();
+
+  c->proc = 0;
+  for (;;) {
+    intr_on();
+    intr_off();
+    chosen = 0;
+
+    for (int i = 1; i <= NPROC; i++) {
+      p = &proc[(rr_last + i) % NPROC];
+      acquire(&p->lock);
+      if (p->state == RUNNABLE && p->queue == 1) {
+        rr_last = p - proc;
+        chosen = p;
+        break;
+      }
+      release(&p->lock);
+    }
+
+    if (chosen) {
+      p = chosen;
+      p->state = RUNNING;
+      p->qticks = 0;
+      p->wait = 0;
+      c->proc = p;
+      swtch(&c->context, &p->context);
+
+      mycpu()->intena = 0;
+      c->proc = 0;
+      release(&p->lock);
+    } else {
+      asm volatile("wfi");
+    }
+  }
+}
+#else
 void
 scheduler(void)
 {
@@ -509,6 +560,7 @@ scheduler(void)
     }
   }
 }
+#endif
 
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
@@ -709,6 +761,27 @@ either_copyin(void *dst, int user_src, uint64 src, uint64 len)
     memmove(dst, (char *)src, len);
     return 0;
   }
+}
+//If the current process has used up its time quantum, return 1 to indicate that it should be preempted. Otherwise, return 0.
+int
+mlfq_tick(void)
+{
+  struct proc *p = myproc();
+  int preempt = 0;
+
+  if(p == 0) return 0;
+
+  acquire(&p->lock);
+  p->qticks++;
+
+  printk("[tick %d cpu%d] pid=%d queue=%d ran=%d\n",
+         ticks, cpuid(), p->pid, p->queue, p->qticks);
+
+  if(p->queue == 1 && p->qticks >= QUANTUM_RR)
+    preempt = 1;
+
+  release(&p->lock);
+  return preempt;
 }
 
 // Print a process listing to console.  For debugging.
