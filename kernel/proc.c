@@ -126,7 +126,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-  p->queue  = 1;
+  p->queue  = 3;
   p->qenter = ticks;
   p->wait   = 0;
   p->burst  = 2;
@@ -477,31 +477,96 @@ proc_getprocs(struct pinfo *buf, int max)
 #ifdef SCHED_MLFQ
 static int rr_last = 0;
 
+static struct proc*
+pick_rr(void)
+{
+  for (int i = 1; i <= NPROC; i++) {
+    struct proc *p = &proc[(rr_last + i) % NPROC];
+    acquire(&p->lock);
+    if (p->state == RUNNABLE && p->queue == 1) {
+      rr_last = p - proc;
+      return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+static struct proc*
+pick_sjf(void)
+{
+  int idx[NPROC], bur[NPROC], n = 0;
+
+  for (struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state == RUNNABLE && p->queue == 2) {
+      int j = n++;
+      while (j > 0 && bur[j - 1] > p->burst) {
+        bur[j] = bur[j - 1];
+        idx[j] = idx[j - 1];
+        j--;
+      }
+      bur[j] = p->burst;
+      idx[j] = p - proc;
+    }
+    release(&p->lock);
+  }
+
+  for (int k = 0; k < n; k++) {
+    struct proc *p = &proc[idx[k]];
+    acquire(&p->lock);
+    if (p->state == RUNNABLE && p->queue == 2) {
+      if (k == n - 1 || lcg_rand100() <= p->conf)
+        return p;
+    }
+    release(&p->lock);
+  }
+  return 0;
+}
+
+static struct proc*
+pick_fcfs(void)
+{
+  for (;;) {
+    int best = -1;
+    uint best_t = 0;
+
+    for (struct proc *p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE && p->queue == 3 &&
+          (best < 0 || p->qenter < best_t)) {
+        best = p - proc;
+        best_t = p->qenter;
+      }
+      release(&p->lock);
+    }
+    if (best < 0)
+      return 0;
+
+    struct proc *p = &proc[best];
+    acquire(&p->lock);
+    if (p->state == RUNNABLE && p->queue == 3)
+      return p;
+    release(&p->lock);
+  }
+}
+
 void
 scheduler(void)
 {
-  struct proc *p, *chosen;
+  struct proc *p;
   struct cpu *c = mycpu();
 
   c->proc = 0;
   for (;;) {
     intr_on();
     intr_off();
-    chosen = 0;
 
-    for (int i = 1; i <= NPROC; i++) {
-      p = &proc[(rr_last + i) % NPROC];
-      acquire(&p->lock);
-      if (p->state == RUNNABLE && p->queue == 1) {
-        rr_last = p - proc;
-        chosen = p;
-        break;
-      }
-      release(&p->lock);
-    }
+    p = pick_rr();
+    if (p == 0) p = pick_sjf();
+    if (p == 0) p = pick_fcfs();
 
-    if (chosen) {
-      p = chosen;
+    if (p) {
       p->state = RUNNING;
       p->qticks = 0;
       p->wait = 0;
@@ -514,6 +579,24 @@ scheduler(void)
     } else {
       asm volatile("wfi");
     }
+  }
+}
+
+void
+mlfq_age(void)
+{
+  for (struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if (p->state == RUNNABLE) {
+      p->wait++;
+      if (p->queue > 1 && p->wait >= AGING_LIMIT) {
+        p->queue--;
+        p->wait = 0;
+        p->qenter = ticks;
+        p->qticks = 0;
+      }
+    }
+    release(&p->lock);
   }
 }
 #else
@@ -679,8 +762,11 @@ wakeup(void *chan)
 
       // If this waiting process has gotten so far as to actually
       // go to sleep, also set it back to RUNNING.
-      if (p->state == SLEEPING) {
+      if (p->state == SLEEPING ) {
         p->state = RUNNABLE;
+        #ifdef SCHED_MLFQ
+          p->qenter = ticks;
+        #endif
       }
     }
     release(&p->lock);

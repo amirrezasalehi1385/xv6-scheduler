@@ -190,3 +190,4 @@ void            virtio_disk_intr(void);
 // lcg.c
 void            lcg_init(void);
 int             lcg_rand100(void);
+void            mlfq_age(void);
