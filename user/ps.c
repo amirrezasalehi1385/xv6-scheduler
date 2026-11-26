@@ -1,48 +1,39 @@
 #include "kernel/types.h"
-#include "kernel/param.h"
+#include "kernel/stat.h"
 #include "user/user.h"
+#include "kernel/pinfo.h"
 
-char *
-state_name(int state)
-{
-  switch (state) {
-  case 1:
-    return "USED    ";
-  case 2:
-    return "SLEEPING";
-  case 3:
-    return "RUNNABLE";
-  case 4:
-    return "RUNNING ";
-  case 5:
-    return "ZOMBIE  ";
-  default:
-    return "UNKNOWN ";
-  }
-}
+char *states[] = {
+  [0] "UNUSED  ",
+  [1] "USED    ",
+  [2] "SLEEPING",
+  [3] "RUNNABLE",
+  [4] "RUNNING ",
+  [5] "ZOMBIE  "
+};
 
 int
-main(void)
+main(int argc, char *argv[])
 {
-  struct pinfo processes[NPROC];
-
-  int count = getprocs(processes, NPROC);
-
-  if (count < 0) {
-    printf("ps: getprocs failed\n");
+  static struct pinfo buf[64];
+  int n = getprocs(buf, 64);
+  if (n < 0) {
+    printf("getprocs failed\n");
     exit(1);
   }
 
-  printf("PID\tPPID\tSTATE   \tSIZE\tNAME\n");
-
-  for (int i = 0; i < count; i++) {
-    printf("%d\t%d\t%s\t%lu\t%s\n",
-           processes[i].pid,
-           processes[i].ppid,
-           state_name(processes[i].state),
-           processes[i].sz,
-           processes[i].name);
+  printf("PID\tPPID\tSTATE\t\tQ\tWAIT\tBURST\tCONF\tQENT\tNAME\n");
+  for (int i = 0; i < n; i++) {
+    printf("%d\t%d\t%s\t%d\t%u\t%d\t%d\t%u\t%s\n",
+           buf[i].pid,
+           buf[i].ppid,
+           states[buf[i].state],
+           buf[i].queue,
+           buf[i].wait,
+           buf[i].burst,
+           buf[i].conf,
+           buf[i].qenter,
+           buf[i].name);
   }
-
   exit(0);
 }

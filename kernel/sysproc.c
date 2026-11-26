@@ -40,9 +40,8 @@ uint64
 sys_getprocs(void)
 {
   uint64 user_buf;
-  int max;
-  int count;
-  struct pinfo kbuf[NPROC];
+  int max, count;
+  struct pinfo *kbuf;
   struct proc *p = myproc();
 
   argaddr(0, &user_buf);
@@ -50,21 +49,69 @@ sys_getprocs(void)
 
   if (max <= 0)
     return -1;
-
   if (max > NPROC)
     max = NPROC;
+  if (max > PGSIZE / sizeof(struct pinfo))
+    max = PGSIZE / sizeof(struct pinfo);
+
+  kbuf = (struct pinfo *)kalloc();
+  if (kbuf == 0)
+    return -1;
 
   count = proc_getprocs(kbuf, max);
 
-  if (count < 0)
+  if (count < 0 ||
+      (count > 0 &&
+       copyout(p->pagetable, p->sz, user_buf,
+               (char *)kbuf, count * sizeof(struct pinfo)) < 0)) {
+    kfree(kbuf);
     return -1;
+  }
 
-  if (count > 0 &&
-      copyout(p->pagetable, p->sz, user_buf,
-              (char *)kbuf, count * sizeof(struct pinfo)) < 0)
-    return -1;
-
+  kfree(kbuf);
   return count;
+}
+
+uint64
+sys_setmlfq(void)
+{
+  int pid, queue, burst, conf;
+  struct proc *p;
+
+  argint(0, &pid);
+  argint(1, &queue);
+  argint(2, &burst);
+  argint(3, &conf);
+
+  if (queue < 1 || queue > 3)
+    return -1;
+  if (burst < 1)
+    return -1;
+  if (conf < 0 || conf > 100)
+    return -1;
+
+  if (pid == 0) {
+    p = myproc();
+    acquire(&p->lock);
+  } else {
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->pid == pid)
+        goto found;
+      release(&p->lock);
+    }
+    return -1;
+  }
+
+found:
+  p->queue  = queue;
+  p->burst  = burst;
+  p->conf   = conf;
+  p->wait   = 0;
+  p->qticks = 0;
+  p->qenter = ticks;         
+  release(&p->lock);
+  return 0;
 }
 
 uint64

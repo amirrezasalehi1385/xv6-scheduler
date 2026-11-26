@@ -443,25 +443,25 @@ proc_getprocs(struct pinfo *buf, int max)
     acquire(&p->lock);
 
     if (p->state != UNUSED) {
-      buf[count].pid = p->pid;
-
-      if (p->parent != 0)
-        buf[count].ppid = p->parent->pid;
-      else
-        buf[count].ppid = 0;
-
-      buf[count].state = p->state;
-      buf[count].sz = p->sz;
+      buf[count].pid    = p->pid;
+      buf[count].ppid   = p->parent ? p->parent->pid : 0;
+      buf[count].state  = p->state;
+      buf[count].sz     = p->sz;
       memmove(buf[count].name, p->name, sizeof(p->name));
+
+      buf[count].queue  = p->queue;
+      buf[count].qenter = p->qenter;
+      buf[count].wait   = p->wait;
+      buf[count].burst  = p->burst;
+      buf[count].conf   = p->conf;
+      buf[count].qticks = p->qticks;
 
       count++;
     }
-
     release(&p->lock);
   }
 
   release(&wait_lock);
-
   return count;
 }
 
