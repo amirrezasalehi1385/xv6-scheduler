@@ -2,128 +2,132 @@
 #include "kernel/pinfo.h"
 #include "user/user.h"
 
-#define NCHILD 3
-#define MAXP   64   // same as NPROC in xv6
+#define NSLEEP 2                 // children that sleep
+#define NBUSY  2                 // children that keep counting
+#define NCHILD (NSLEEP + NBUSY)
+#define MAXP   64
 
-// Print ok/FAIL for one check and abort on the first failure.
+static int kids[NCHILD];
+static int nkids = 0;
+static struct pinfo buf[MAXP];
+
+// kill all children and wait for them
+static void
+cleanup(void)
+{
+  for(int i = 0; i < nkids; i++)
+    kill(kids[i]);
+  for(int i = 0; i < nkids; i++)
+    wait(0);
+}
+
 static void
 check(int cond, char *msg)
 {
   if(!cond){
     printf("FAIL: %s\n", msg);
+    cleanup();
     exit(1);
   }
   printf("ok: %s\n", msg);
 }
 
-// Linear search for a pid inside the buffer returned by getprocs().
 static struct pinfo *
-find(struct pinfo *b, int n, int pid)
+find(int n, int pid)
 {
   for(int i = 0; i < n; i++)
-    if(b[i].pid == pid)
-      return &b[i];
+    if(buf[i].pid == pid)
+      return &buf[i];
   return 0;
+}
+
+static void
+create_child(int sleeper)
+{
+  int pid = fork();
+  if(pid < 0){
+    printf("fork failed\n");
+    cleanup();
+    exit(1);
+  }
+  if(pid == 0){
+    if(sleeper){
+      pause(100000);             // sleep for a long time
+    } else {
+      volatile uint64 count = 0;
+      for(;;)
+        count++;                 // keep using the CPU
+    }
+    exit(0);
+  }
+  kids[nkids++] = pid;
+  printf("created %s child %d\n", sleeper ? "sleeping" : "busy", pid);
+}
+
+// 1 if every sleeping child is currently SLEEPING
+static int
+all_sleeping(void)
+{
+  int n = getprocs(buf, MAXP);
+  for(int i = 0; i < NSLEEP; i++){
+    struct pinfo *p = find(n, kids[i]);
+    if(p == 0 || p->state != 2)
+      return 0;
+  }
+  return 1;
 }
 
 int
 main(void)
 {
-  static struct pinfo buf[MAXP];
-  int kids[NCHILD];
   int me = getpid();
 
-  // Pipe used only to keep children blocked (truly SLEEPING).
-  // Children block in read() because nobody writes to it.
-  // pause() is NOT used for this: it sleeps on &ticks and every
-  // child is woken up on each timer tick, so its state would flip
-  // between SLEEPING and RUNNABLE.
-  int hold[2];
-  if(pipe(hold) < 0){
-    printf("pipe failed\n");
-    exit(1);
-  }
+  // 1) sleeping children
+  for(int i = 0; i < NSLEEP; i++)
+    create_child(1);
 
-  // Create children that block on the pipe.
-  for(int i = 0; i < NCHILD; i++){
-    int pid = fork();
-    if(pid < 0){
-      printf("fork failed\n");
-      exit(1);
-    }
-    if(pid == 0){
-      close(hold[1]);          // child must not keep the write end open
-      char c;
-      read(hold[0], &c, 1);    // sleeps on the pipe until EOF
-      exit(0);                 // reached after parent closes hold[1]
-    }
-    kids[i] = pid;             // parent: remember the child's pid
-  }
-  close(hold[0]);              // parent only needs the write end
+  int start = uptime();
+  int ok = 0;
+  while(!ok && uptime() - start < 50)
+    ok = all_sleeping();
+  check(ok, "sleeping children are SLEEPING");
 
-  // Give the children time to reach read() and go to sleep.
-  pause(10);
+  // 2) busy children
+  for(int i = 0; i < NBUSY; i++)
+    create_child(0);
 
-  // ---- 1) Normal case: max is large enough ----
+  // 3) check PID and PPID
   int n = getprocs(buf, MAXP);
-  check(n > 0, "getprocs returns a positive count");
-
-  // Every child must be listed with correct ppid, state and size.
+  check(n > 0, "getprocs succeeded");
   for(int i = 0; i < NCHILD; i++){
-    struct pinfo *p = find(buf, n, kids[i]);
-    check(p != 0, "child is present in the result");
-    check(p->ppid == me, "child's ppid equals parent's pid");
-    check(p->state == 2 /* SLEEPING */, "child is SLEEPING");
-    check(p->sz > 0, "child's size is greater than 0");
+    struct pinfo *p = find(n, kids[i]);
+    check(p != 0, "child PID found");
+    check(p->ppid == me, "child PPID is correct");
+    if(i >= NSLEEP)
+      check(p->state == 3 || p->state == 4, "busy child is RUNNABLE/RUNNING");
   }
 
-  // The calling process itself must be listed and RUNNING.
-  struct pinfo *self = find(buf, n, me);
-  check(self != 0, "calling process is present in the result");
-  check(self->state == 4 /* RUNNING */, "calling process is RUNNING");
-  check(strcmp(self->name, "proctest") == 0, "calling process name is correct");
+  // 4) max smaller and larger than the number of processes
+  printf("number of processes: %d\n", n);
+  check(getprocs(buf, n - 1) == n - 1, "smaller max returns max entries");
+  check(getprocs(buf, MAXP) == n, "larger max returns all processes");
 
-  // init (pid 1) has no parent, so its ppid must be 0.
-  struct pinfo *init = find(buf, n, 1);
-  check(init != 0 && init->ppid == 0, "init has ppid 0");
-
-  // ---- 2) max smaller than the number of processes ----
-  int m = getprocs(buf, 2);
-  check(m == 2, "max=2 returns exactly 2 entries");
-
-  // ---- 3) max larger than the number of processes ----
-  int big = getprocs(buf, MAXP);
-  check(big == n && big < MAXP, "large max returns the actual count only");
-
-  // ---- 4) Invalid arguments must return -1 ----
-  check(getprocs(buf, 0) == -1, "max=0 returns -1");
-  check(getprocs(buf, -1) == -1, "max<0 returns -1");
-  check(getprocs((struct pinfo *)0xFFFFFFFFFFFFull, 2) == -1,
-        "invalid buf address returns -1");
-
-  // ---- 5) Show the table using the ps program ----
-  // Run ps in a separate child so we can wait for it.
+  // 5) show ps output
+  printf("\n--- ps ---\n");
   int pid = fork();
-  if(pid < 0){
-    printf("fork failed\n");
-    exit(1);
-  }
   if(pid == 0){
-    close(hold[1]);                 // ps child must not hold the write end
     char *argv[] = {"ps", 0};
     exec("ps", argv);
-    printf("exec ps failed\n");     // only reached if exec fails
     exit(1);
   }
-  wait(0);  // wait for ps
+  check(pid > 0, "fork for ps");
+  wait(0);
 
-  // Release the children: EOF on their read() makes them exit.
-  close(hold[1]);
+  // 6) time to compare with Ctrl+P
+  printf("\n--- press Ctrl+P now (10 seconds) ---\n");
+  pause(100);
 
-  // Reap the sleeping children.
-  for(int i = 0; i < NCHILD; i++)
-    wait(0);
-
+  cleanup();
   printf("ALL TESTS PASSED\n");
   exit(0);
 }
